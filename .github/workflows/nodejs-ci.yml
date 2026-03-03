@@ -1,0 +1,80 @@
+# Reusable Node.js CI Workflow
+# This workflow can be called from other repositories
+
+name: Node.js CI Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Node.js version to use"
+        required: false
+        type: string
+        default: "18"
+      working-directory:
+        description: "Working directory containing package.json"
+        required: false
+        type: string
+        default: "."
+      run-lint:
+        description: "Whether to run linting"
+        required: false
+        type: boolean
+        default: true
+      run-tests:
+        description: "Whether to run tests"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ inputs.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run linting
+        if: ${{ inputs.run-lint }}
+        run: npm run lint --if-present
+
+      - name: Run tests
+        if: ${{ inputs.run-tests }}
+        run: npm test
+
+      - name: Run tests with coverage
+        if: ${{ inputs.run-tests }}
+        run: npm run test:coverage --if-present
+        continue-on-error: true
+
+      - name: Upload coverage report
+        if: ${{ inputs.run-tests }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ${{ inputs.working-directory }}/coverage/
+          retention-days: 7
+        continue-on-error: true
+
+      - name: Test Summary
+        run: |
+          echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Node.js version: ${{ inputs.node-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Linting: ${{ inputs.run-lint && 'Enabled' || 'Disabled' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests: ${{ inputs.run-tests && 'Enabled' || 'Disabled' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ✅ Completed" >> $GITHUB_STEP_SUMMARY

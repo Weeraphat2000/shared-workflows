@@ -46,19 +46,10 @@ on:
         required: false
         type: boolean
         default: false
-      slack-notification:
-        description: "Whether to send Slack notification"
-        required: false
-        type: boolean
-        default: false
       text:
         description: "Additional text input (optional)"
         required: false
         type: string
-    secrets:
-      SLACK_WEBHOOK_URL:
-        description: "Slack webhook URL for notifications"
-        required: false
 
 jobs:
   # ========================================
@@ -334,83 +325,3 @@ jobs:
             echo "### Additional Notes" >> $GITHUB_STEP_SUMMARY
             echo "${{ inputs.text }}" >> $GITHUB_STEP_SUMMARY
           fi
-
-      - name: Send Slack Notification (Success)
-        if: ${{ inputs.slack-notification && success() && secrets.SLACK_WEBHOOK_URL != '' }}
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          payload: |
-            {
-              "text": "✅ CI Pipeline Passed",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "✅ CI Pipeline Passed"
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    { "type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}" },
-                    { "type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}" },
-                    { "type": "mrkdwn", "text": "*Commit:*\n${{ github.sha }}" },
-                    { "type": "mrkdwn", "text": "*Triggered by:*\n${{ github.actor }}" }
-                  ]
-                },
-                {
-                  "type": "actions",
-                  "elements": [
-                    {
-                      "type": "button",
-                      "text": { "type": "plain_text", "text": "View Run" },
-                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                    }
-                  ]
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
-
-      - name: Send Slack Notification (Failure)
-        if: ${{ inputs.slack-notification && failure() && secrets.SLACK_WEBHOOK_URL != '' }}
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          payload: |
-            {
-              "text": "❌ CI Pipeline Failed",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "❌ CI Pipeline Failed"
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    { "type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}" },
-                    { "type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}" },
-                    { "type": "mrkdwn", "text": "*Commit:*\n${{ github.sha }}" },
-                    { "type": "mrkdwn", "text": "*Triggered by:*\n${{ github.actor }}" }
-                  ]
-                },
-                {
-                  "type": "actions",
-                  "elements": [
-                    {
-                      "type": "button",
-                      "text": { "type": "plain_text", "text": "View Run" },
-                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-                    }
-                  ]
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

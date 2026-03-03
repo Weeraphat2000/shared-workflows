@@ -81,9 +81,9 @@ jobs:
           echo "- Node.js version: ${{ inputs.node-version }}" >> $GITHUB_STEP_SUMMARY
           echo "- Linting: ${{ inputs.run-lint && 'Enabled' || 'Disabled' }}" >> $GITHUB_STEP_SUMMARY
           echo "- Tests: ${{ inputs.run-tests && 'Enabled' || 'Disabled' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Status: ✅ Completed" >> $GITHUB_STEP_SUMMARY
-
-      - name: Additional Input
-        if: ${{ inputs.text }}
-        run: |
-          echo "Additional input: ${{ inputs.text }}"
+          echo "- Status: ✅ Completed" 
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.text }}" ]; then
+            echo "### Additional Input" >> $GITHUB_STEP_SUMMARY
+            echo "${{ inputs.text }}" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -26,6 +26,10 @@ on:
         required: false
         type: boolean
         default: true
+      text:
+        description: "Additional text input (optional)"
+        required: false
+        type: string
 
 jobs:
   build-and-test:
@@ -78,3 +82,8 @@ jobs:
           echo "- Linting: ${{ inputs.run-lint && 'Enabled' || 'Disabled' }}" >> $GITHUB_STEP_SUMMARY
           echo "- Tests: ${{ inputs.run-tests && 'Enabled' || 'Disabled' }}" >> $GITHUB_STEP_SUMMARY
           echo "- Status: ✅ Completed" >> $GITHUB_STEP_SUMMARY
+
+      - name: Additional Input
+        if: ${{ inputs.text }}
+        run: |
+          echo "Additional input: ${{ inputs.text }}"

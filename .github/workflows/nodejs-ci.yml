@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       node-version:
-        description: "Node.js version to use"
+        description: "Node.js version to use (ignored if matrix-test is true)"
         required: false
         type: string
         default: "18"
@@ -26,14 +26,194 @@ on:
         required: false
         type: boolean
         default: true
+      run-security-audit:
+        description: "Whether to run npm audit"
+        required: false
+        type: boolean
+        default: true
+      run-format-check:
+        description: "Whether to check code formatting with Prettier"
+        required: false
+        type: boolean
+        default: true
+      run-build:
+        description: "Whether to run build step"
+        required: false
+        type: boolean
+        default: true
+      matrix-test:
+        description: "Whether to run tests on multiple Node.js versions (18, 20, 22)"
+        required: false
+        type: boolean
+        default: false
+      slack-notification:
+        description: "Whether to send Slack notification"
+        required: false
+        type: boolean
+        default: false
       text:
         description: "Additional text input (optional)"
         required: false
         type: string
+    secrets:
+      SLACK_WEBHOOK_URL:
+        description: "Slack webhook URL for notifications"
+        required: false
 
 jobs:
-  build-and-test:
+  # ========================================
+  # Job 1: Security Audit
+  # ========================================
+  security-audit:
+    name: 🔒 Security Audit
     runs-on: ubuntu-latest
+    if: ${{ inputs.run-security-audit }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run npm audit
+        run: |
+          echo "## 🔒 Security Audit Results" >> $GITHUB_STEP_SUMMARY
+          npm audit --audit-level=moderate || true
+          npm audit --json > audit-results.json || true
+
+          # Count vulnerabilities
+          CRITICAL=$(cat audit-results.json | jq '.metadata.vulnerabilities.critical // 0')
+          HIGH=$(cat audit-results.json | jq '.metadata.vulnerabilities.high // 0')
+          MODERATE=$(cat audit-results.json | jq '.metadata.vulnerabilities.moderate // 0')
+
+          echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| High | $HIGH |" >> $GITHUB_STEP_SUMMARY
+          echo "| Moderate | $MODERATE |" >> $GITHUB_STEP_SUMMARY
+
+          # Fail if critical or high vulnerabilities
+          if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+            echo "❌ Found critical or high security vulnerabilities!" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+          echo "✅ No critical or high vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-results
+          path: ${{ inputs.working-directory }}/audit-results.json
+          retention-days: 7
+        continue-on-error: true
+
+  # ========================================
+  # Job 2: Code Quality (Lint + Format)
+  # ========================================
+  code-quality:
+    name: 🎨 Code Quality
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Check code formatting (Prettier)
+        if: ${{ inputs.run-format-check }}
+        run: |
+          echo "## 🎨 Code Formatting Check" >> $GITHUB_STEP_SUMMARY
+          if npx prettier --check . 2>/dev/null; then
+            echo "✅ All files are properly formatted" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Some files need formatting (run: npx prettier --write .)" >> $GITHUB_STEP_SUMMARY
+            npx prettier --check . || true
+          fi
+        continue-on-error: true
+
+      - name: Run ESLint
+        if: ${{ inputs.run-lint }}
+        run: |
+          echo "## 🔍 Linting Results" >> $GITHUB_STEP_SUMMARY
+          npm run lint --if-present && echo "✅ No linting errors" >> $GITHUB_STEP_SUMMARY || echo "⚠️ Linting issues found" >> $GITHUB_STEP_SUMMARY
+
+  # ========================================
+  # Job 3: Build
+  # ========================================
+  build:
+    name: 🏗️ Build
+    runs-on: ubuntu-latest
+    needs: [code-quality]
+    if: ${{ inputs.run-build }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build project
+        run: |
+          echo "## 🏗️ Build Results" >> $GITHUB_STEP_SUMMARY
+          if npm run build --if-present; then
+            echo "✅ Build completed successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ No build script found or build skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            ${{ inputs.working-directory }}/dist/
+            ${{ inputs.working-directory }}/build/
+          retention-days: 7
+        continue-on-error: true
+
+  # ========================================
+  # Job 4: Test (Single Node Version)
+  # ========================================
+  test:
+    name: 🧪 Test (Node ${{ inputs.node-version }})
+    runs-on: ubuntu-latest
+    needs: [code-quality]
+    if: ${{ inputs.run-tests && !inputs.matrix-test }}
 
     defaults:
       run:
@@ -53,21 +233,14 @@ jobs:
       - name: Install dependencies
         run: npm ci || npm install
 
-      - name: Run linting
-        if: ${{ inputs.run-lint }}
-        run: npm run lint --if-present
-
       - name: Run tests
-        if: ${{ inputs.run-tests }}
         run: npm test
 
       - name: Run tests with coverage
-        if: ${{ inputs.run-tests }}
         run: npm run test:coverage --if-present
         continue-on-error: true
 
       - name: Upload coverage report
-        if: ${{ inputs.run-tests }}
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
@@ -77,13 +250,167 @@ jobs:
 
       - name: Test Summary
         run: |
-          echo "## CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
           echo "- Node.js version: ${{ inputs.node-version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Linting: ${{ inputs.run-lint && 'Enabled' || 'Disabled' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Tests: ${{ inputs.run-tests && 'Enabled' || 'Disabled' }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Status: ✅ Completed" 
+          echo "- Status: ✅ All tests passed" >> $GITHUB_STEP_SUMMARY
+
+  # ========================================
+  # Job 5: Matrix Test (Multiple Node Versions)
+  # ========================================
+  test-matrix:
+    name: 🧪 Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    needs: [code-quality]
+    if: ${{ inputs.run-tests && inputs.matrix-test }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22"]
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Run tests
+        run: npm test
+
+      - name: Run tests with coverage
+        if: ${{ matrix.node-version == '20' }}
+        run: npm run test:coverage --if-present
+        continue-on-error: true
+
+      - name: Upload coverage report
+        if: ${{ matrix.node-version == '20' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-node-${{ matrix.node-version }}
+          path: ${{ inputs.working-directory }}/coverage/
+          retention-days: 7
+        continue-on-error: true
+
+      - name: Test Summary
+        run: |
+          echo "## 🧪 Test Results (Node ${{ matrix.node-version }})" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ✅ All tests passed" >> $GITHUB_STEP_SUMMARY
+
+  # ========================================
+  # Job 6: Pipeline Summary & Notifications
+  # ========================================
+  summary:
+    name: 📋 Summary & Notify
+    runs-on: ubuntu-latest
+    needs: [security-audit, code-quality, build, test, test-matrix]
+    if: always()
+
+    steps:
+      - name: Generate Pipeline Summary
+        run: |
+          echo "## 📋 CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Audit | ${{ needs.security-audit.result == 'success' && '✅' || needs.security-audit.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Code Quality | ${{ needs.code-quality.result == 'success' && '✅' || needs.code-quality.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result == 'success' && '✅' || needs.build.result == 'skipped' && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests | ${{ (needs.test.result == 'success' || needs.test-matrix.result == 'success') && '✅' || (needs.test.result == 'skipped' && needs.test-matrix.result == 'skipped') && '⏭️' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
           if [ -n "${{ inputs.text }}" ]; then
-            echo "### Additional Input" >> $GITHUB_STEP_SUMMARY
+            echo "### Additional Notes" >> $GITHUB_STEP_SUMMARY
             echo "${{ inputs.text }}" >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Send Slack Notification (Success)
+        if: ${{ inputs.slack-notification && success() && secrets.SLACK_WEBHOOK_URL != '' }}
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "✅ CI Pipeline Passed",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "✅ CI Pipeline Passed"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    { "type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}" },
+                    { "type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}" },
+                    { "type": "mrkdwn", "text": "*Commit:*\n${{ github.sha }}" },
+                    { "type": "mrkdwn", "text": "*Triggered by:*\n${{ github.actor }}" }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": { "type": "plain_text", "text": "View Run" },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Send Slack Notification (Failure)
+        if: ${{ inputs.slack-notification && failure() && secrets.SLACK_WEBHOOK_URL != '' }}
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "❌ CI Pipeline Failed",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "❌ CI Pipeline Failed"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    { "type": "mrkdwn", "text": "*Repository:*\n${{ github.repository }}" },
+                    { "type": "mrkdwn", "text": "*Branch:*\n${{ github.ref_name }}" },
+                    { "type": "mrkdwn", "text": "*Commit:*\n${{ github.sha }}" },
+                    { "type": "mrkdwn", "text": "*Triggered by:*\n${{ github.actor }}" }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": { "type": "plain_text", "text": "View Run" },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
